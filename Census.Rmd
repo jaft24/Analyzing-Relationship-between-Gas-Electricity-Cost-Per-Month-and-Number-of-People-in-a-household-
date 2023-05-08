@@ -1,0 +1,304 @@
+---
+title: "Census Data with Tidycensus"
+Author: "Pedro Ochoa and Jaleta Tesgera"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidycensus) # You will probably need to install tidycensus
+library(tidyverse)
+library(scales)
+library(survey)
+
+# census_api_key("YOUR KEY GOES HERE", install = TRUE)
+```
+
+Adapted from [*Analyzing US Census Data: Methods, Maps, and Models in R*](https://walker-data.com/census-r/)by Kyle Walker. If you want to learn more about Census Data, I highly recommend checking out this book.
+
+## The American Community Survey
+
+The American Community Survey (ACS) is a demographics survey program conducted by the U.S. Census Bureau since 2005. It regularly gathers information previously contained only in the long form of the decennial census, including ancestry, citizenship, educational attainment, income, language proficiency, migration, disability, employment, and housing characteristics.
+
+In addition to aggregate data, the Census Bureau also releases **microdata** (individual-level data). In many cases, microdata reflect responses to surveys that are de-identified and anonymized, then prepared in datasets that include rich detail about survey responses. These datasets, named the Public Use Microdata Series (PUMS), allow for detailed cross-tabulations not available in aggregated data.
+
+The ACS PUMS is available in both 1-year and 5-year versions. The 1-year PUMS covers about 1 percent of the US population, whereas the 5-year PUMS covers about 5 percent. The PUMS microdata is a subsample of the ACS data that is used for generating the published aggregate tables.
+
+## Step 1: Install tidycensus and get an API key
+
+To get started with tidycensus, users should install the package with `install.packages("tidycensus")` if not yet installed; load the package with `library("tidycensus")`; and set their Census API key with the `census_api_key()` function. API keys can be obtained at <https://api.census.gov/data/key_signup.html>. After you've signed up for an API key, be sure to activate the key from the email you receive from the Census Bureau so it works correctly. Declaring `install = TRUE` when calling `census_api_key()` will install the key for use in future R sessions, which may be convenient for many users.
+
+```{r}
+census_api_key("90d69918e03d3395b2c3d151468a1f60c8f94603", install = TRUE)
+```
+
+## Step 2: Download some data
+
+American Community Survey microdata are available in **tidycensus** by using the `get_pums()` function, which communicates with the Census API and returns PUMS data.
+
+`get_pums()` requires specifying one or more variables and the state for which you'd like to request data. For national-level analyses, `state = 'all'` *can* get data for the entire USA by iterating over all US states, but the data can take some time to download depending on the user's internet connection. The `get_pums()` function defaults to the 5-year ACS with `survey = "acs5"`; 1-year ACS data is available with `survey = "acs1"`. Data are available from 2017 through 2021 (but not 2020 for the 1-year ACS due to low response rates around the pandemic).
+
+For this project, you will probably want to choose a single state (or a few neighboring states) and a single year (ACS data is not 100% consistent across years because the questionnaire gets updated).
+
+Let's take a look at a first example using `get_pums()` to request microdata for Minnesota from the 1-year 2021 ACS with information on sex, age (`AGEP`), and household type (`HHT`):
+
+```{r}
+mn_pums <- get_pums(
+  variables = c("SEX", "AGEP", "HHT"),
+  state = "MN",
+  survey = "acs1",
+  year = 2021
+)
+
+mn_pums
+```
+
+`get_pums()` returns some technical variables by default without the user needing to request them specifically. These technical variables are essential for uniquely identifying observations in the dataset and eventually performing any analysis and modeling. These default technical variables include:
+
+-   `SERIALNO`: a serial number that uniquely identifies households in the sample;
+
+-   `SPORDER`: the order of the person in the household, which when combined with `SERIALNO` uniquely identifies a person;
+
+-   `WGTP`: the household weight;
+
+-   `PWGTP`: the person weight;
+
+-   `ST`: the state FIPS code.
+
+Given that PUMS data are a *sample* of the US population, the weights columns must be used for analysis. In general terms, we can interpret the weights as "the number of observations in the general population represented by this particular row in the dataset." In turn, a row with a `PWGTP` value of 50 represents about 50 people in Minnesota with the same demographic characteristics of the "person" in that row.
+
+## What do my variables mean?
+
+What does a value of "b" mean for the household type (`HHT`) variable? Which sex gets a value of 1 vs 2? To find out details about the variables, `tidycensus` has a `pums_variables` object.
+
+```{r}
+View(pums_variables)
+```
+
+Search for "HHT" and "SEX". For more details, go to the [PUMS documentation page](https://www.census.gov/programs-surveys/acs/microdata/documentation.html). While we could manually recode the data to make it more user friendly, `tidycensus` will do that for us with the option `recode = TRUE`.
+
+```{r}
+mn_pums <- get_pums(
+  variables = c("SEX", "AGEP", "HHT"),
+  state = "MN",
+  survey = "acs1",
+  year = 2021,
+  recode = TRUE
+)
+mn_pums
+```
+
+## Variable Filters
+
+PUMS datasets, especially those from the 5-year ACS, can get quite large. Even users with speedy internet connections will need to be patient when downloading what could be millions of records from the Census API and potentially risk internet hiccups. When only subsets of data are required for an analysis, the `variables_filter` argument can return a subset of data from the API, reducing long download times.
+
+The `variables_filter` argument should be supplied as a named list where variable names (which can be quoted or unquoted) are paired with a data value or vector of data values to be requested from the API. The "filter" works by passing a special query to the Census API which will only return a subset of data, meaning that the entire dataset does not need to be first downloaded then filtered on the R side. This leads to substantial time savings for targeted queries.
+
+In the example below, the Minnesota request is modified with `variables_filter` to return only women (`SEX = 2`) between the ages of 30 and 49, but this time from the 5-year ACS PUMS.
+
+```{r}
+mn_pums_CIT <- get_pums(
+  variables = ("CIT"),
+  state = "MN",
+  survey = "acs1",
+  year = 2021
+)
+view(mn_pums_CIT)
+```
+
+```{r}
+mn_pums_NP <- get_pums(
+  variables = ("NP"),
+  state = "MN",
+  survey = "acs1",
+  year = 2021
+)
+view(mn_pums_NP)
+```
+
+```{r}
+mn_pums_GASP <- get_pums(
+  variables = c("GASP"),
+  state = "MN",
+  survey = "acs1",
+  year = 2021
+)
+view(mn_pums_GASP)
+```
+
+
+```{r}
+mn_pums_ELEP <- get_pums(
+  variables = c("ELEP"),
+  state = "MN",
+  survey = "acs1",
+  year = 2021
+)
+view(mn_pums_ELEP)
+```
+
+```{r}
+mn_pums_table <- get_pums(
+  variables = c("ELEP", "GASP", "NP", "CIT"),
+  state = "MN",
+  survey = "acs1",
+  year = 2021
+)
+view(mn_pums_table)
+```
+
+## Finding Variables for the Midterm Project
+
+numeric, linear
+binary, logistic
+
+Variable 
+1. ELEP (Electricity Monthly Cost)
+-Electricity Cost(Monthly Cost, use ADJHSG to adjust ELEP to constant dollars)
+~3-9,999 (Rounded and Top coded)
+~ 2-- N/A (GQ,vacant,included in rent or in condo fee/no charge or electricity not used)
+
+2.GASP Gas (monthly cost, use ADJHSG to adjust GASP values 4 and over to constant dollars)
+-Electricity Cost(Monthly Cost, use ADJHSG to adjust ELEP to constant dollars)
+~3-9,999 (Rounded and Top coded)
+~ 2-- N/A (GQ,vacant,included in rent or in condo fee/no charge or electricity not used)
+
+5.NP : Number of Persons in this household
+~2 to 20 --Number of persons in household
+~0 -- Vacant unit
+~1 == One person in household or any persons in group quarters
+
+7.CIT - (Citizenship status)
+~ 1 -- Born in the US
+~ 2 -- Born in PC, Guam, the US Virgin Islands, Northern Marianas ,color="black",
+~ 3 -- Born abroad of US citizen parent/s color red
+~ 4 -- US citizen by naturalization color blue
+~ 5 -- Not a US citzens color green
+
+```{r}
+mod.1 <-  lm(ELEP ~ CIT, data = mn_pums_table)
+mod.1 
+intercept <- coef(mod.1)[[1]]
+slope_CIT2 <- coef(mod.1)[[2]]
+slope_CIT3 <- coef(mod.1)[[3]]
+slope_CIT4 <- coef(mod.1)[[4]]
+slope_CIT5 <- coef(mod.1)[[5]]
+
+ggplot(data = mn_pums_table,aes(x=ELEP, y=CIT))+
+  geom_jitter(alpha = 0.2, color="lightblue")+
+    geom_abline(aes(intercept=intercept, slope=slope_CIT2),color="black",size=1)+
+  geom_abline(aes(intercept=intercept,slope=slope_CIT3),color="red", size=1)+
+  geom_abline(aes(intercept=intercept,slope=slope_CIT4),color="blue", size=1)+
+  geom_abline(aes(intercept=intercept,slope=slope_CIT5),color="green", size=1)
+
+###
+mn_pums_table_log <- mn_pums_table %>%
+  mutate(log_electric= log(ELEP))
+
+mod.12  <-  lm(log_electric ~ CIT, data = mn_pums_table_log)
+mod.12 
+intercept12 <- coef(mod.12)[[1]]
+slope_CIT12<- coef(mod.12)[[2]]
+slope_CIT13<- coef(mod.12)[[3]]
+slope_CIT14<- coef(mod.12)[[4]]
+slope_CIT15<- coef(mod.12)[[5]]
+
+ggplot(data = mn_pums_table_log,aes(x= log_electric, y= CIT))+
+  geom_jitter(alpha = 0.2, color="lightblue")+
+   labs(x = "Log of Electrical Costs per Month",
+        y = "Citizenship Categories") +
+    geom_abline(aes(intercept=intercept12, slope=slope_CIT12),color="black",size=1)+
+  geom_abline(aes(intercept=intercept12,slope=slope_CIT13),color="red", size=1)+
+  geom_abline(aes(intercept=intercept12,slope=slope_CIT14),color="blue", size=1)+
+  geom_abline(aes(intercept=intercept12,slope=slope_CIT15),color="green", size=1)
+
+```
+
+To create a better visualization of the data with moderately skewed data more normally distributed and achieve constant variance, we took the log of the electric to archive the second graph you see. Even though we will use th log graphs for better inperpertation we will still use the first lms to interpret the coefficients. As we can see the people Born abroad of US citizen parent/s and US citizen by naturalization have the highest cost of electric uage as compared to the other classes of society in America. 
+
+Moreover looking at our linear model:
+The coefficients in the model represent the estimated effect of each category of citizens on electric usage, relative to a reference category (CIT1). Here's the interpretation of the coefficients:
+
+The intercept (164.35) represents the estimated electric usage when only the citizen category is CIT1, (Born in the US) is included in the model. The coefficient -13.03 the estimated difference in electric usage between people born in PC, Guam, the US Virgin Islands, Northern Marianas  as compared to born in US citizens. If a citizen is born in PC, Guam, the US Virgin Islands, Northern Marianas  instead of US, their electric usage is expected to decrease by approximately 13.03 units.
+Similarly, the coefficients for citizens born abroad of US citizen parent/s , US citizen by naturalization , and non US Citizens (-16.40, -19.01, and -34.16, respectively) represent the estimated differences in electric usage between them as compared to Us born citizens. This indicated that US born citizens have high spend for electricity than other categories.
+
+```{r}
+mod.2  <-  lm(ELEP ~ NP, data = mn_pums_table)
+mod.2 
+intercept2 <- coef(mod.2)[[1]]
+slope2 <- coef(mod.2)[[2]]
+
+ggplot(data = mn_pums_table,aes(x=ELEP, y= NP),color=factor(NP))+
+  geom_jitter(alpha = 0.1, color="orange")+
+    geom_abline(aes(intercept=intercept2, slope=slope2),color="darkred", size=1) 
+#Lets log ELEP
+
+mn_pums_table_log <- mn_pums_table %>%
+  mutate(log_electric= log(ELEP))
+
+mod.21  <-  lm(log_electric ~ NP, data = mn_pums_table_log)
+mod.21 
+intercept21 <- coef(mod.21)[[1]]
+slope21 <- coef(mod.21)[[2]]
+
+intercept21
+slope21 
+ggplot(data = mn_pums_table_log,aes(x= NP, y= log_electric),color=factor(NP))+
+  geom_jitter(alpha = 0.1, color="orange")+
+   labs(x = "Number of People in the Household",
+        y = "Log-Electric Cost per Month") +
+    geom_abline(aes(intercept=intercept21, slope=slope21),color="darkred", size=1) 
+
+```
+
+From the log graph we can observe that a large number of people in the household is concentrated in the range between 1 and 5, thus the electric cost per month also exponentially increases across that class of household population. We find some rare data outside the range i.e. people with more than 15 children in the house or people who have an electric cost per month consumption more than > exp(5), and poeple with members in their household yet almost no electric cost per month consumption. Although we don't see our lm representing those data, the gravity of this data is represented by our model.
+
+And as for the numerical interpretation, we can't make much from the intercept, 97.70, because it doesn;t make sense to have his as an electric per month consumption when there is no person in the household (NP = 0). However, for 21.05, this numnber represents the increase in the  electric per month consumption for every 1 additional person in a household.
+
+```{r}
+mod.3 <-  lm(GASP ~ CIT, data = mn_pums_table)
+mod.3 
+intercept <- coef(mod.3)[[1]]
+slope_CIT32 <- coef(mod.3)[[2]]
+slope_CIT33 <- coef(mod.3)[[3]]
+slope_CIT34 <- coef(mod.3)[[4]]
+slope_CIT35 <- coef(mod.3)[[5]]
+
+ggplot(data = mn_pums_table,aes(x= GASP, y= CIT))+
+  geom_jitter(alpha = 0.2, color="grey")+
+    geom_abline(aes(intercept=intercept, slope=slope_CIT32),color="black", size=1)+
+  geom_abline(aes(intercept=intercept,slope=slope_CIT33),color="red", size=1)+
+  geom_abline(aes(intercept=intercept,slope=slope_CIT34),color="blue", size=1)+
+  geom_abline(aes(intercept=intercept,slope=slope_CIT35),color="green", size=1)
+
+mn_pums_table_log_gas <- mn_pums_table %>%
+  mutate(log_gas= log(GASP))
+
+mod.31  <-  lm(log_gas ~ CIT, data = mn_pums_table_log_gas)
+mod.31 
+intercept31 <- coef(mod.31)[[1]]
+slope_CIT312<- coef(mod.31)[[2]]
+slope_CIT313<- coef(mod.31)[[3]]
+slope_CIT314<- coef(mod.31)[[4]]
+slope_CIT315<- coef(mod.31)[[5]]
+
+ggplot(data = mn_pums_table_log_gas,aes(x= log_gas, y=CIT ))+
+  geom_jitter(alpha = 0.2, color="grey")+
+    labs(x = "Log of Gas Costs per Month",
+         y = "Citizenship Categories") +
+    geom_abline(aes(intercept=intercept31, slope=slope_CIT312),color="black", size=1)+
+  geom_abline(aes(intercept=intercept31,slope=slope_CIT313),color="red", size=1)+
+  geom_abline(aes(intercept=intercept31,slope=slope_CIT314),color="blue", size=1)+
+  geom_abline(aes(intercept=intercept31,slope=slope_CIT315),color="green", size=1)
+
+```
+As we can see the people Born abroad of US citizen parent/s, US citizen by naturalization, and citizens born in PC, Guam, the US Virgin Islands, Northern Marianas  have the highest cost of gas uage as compared to the non citizens in America. 
+
+Moreover looking at our linear model:
+The coefficients in the model represent the estimated effect of each category of citizens on gas usage, relative to a reference category (CIT1). Here's the interpretation of the coefficients:
+
+The intercept (82.6952) represents the estimated gas usage when only the citizen category is CIT1, (Born in the US) is included in the model. The coefficient -0.8005 the estimated difference in gas usage between people born in PC, Guam, the US Virgin Islands, Northern Marianas  as compared to born in US citizens. If a citizen is born in PC, Guam, the US Virgin Islands, Northern Marianas  instead of US, their gas usage is expected to decrease by approximately 0.8005 units.
+Similarly, the coefficients for citizens born abroad of US citizen parent/s , US citizen by naturalization , and non US Citizens (-8.5064, -8.4233, and -23.9352 respectively) represent the estimated differences in gas usage between them as compared to Us born citizens. This indicated that non US citizens have the lowest spend for gas than other categories.
+
+
